@@ -157,7 +157,61 @@ class PushtEnv(EnvConfig):
             "max_episode_steps": self.episode_length,
         }
 
+@EnvConfig.register_subclass("pusht_224")
+@dataclass
+class PushtEnv224(EnvConfig):
+    task: str | None = "PushT-v0"
+    fps: int = 10
+    episode_length: int = 300
+    obs_type: str = "pixels_state"
+    render_mode: str = "rgb_array"
+    visualization_width: int = 680
+    visualization_height: int = 680
+    observation_height: int = 224
+    observation_width: int = 224
+    features: dict[str, PolicyFeature] = field(
+        default_factory=lambda: {
+            ACTION: PolicyFeature(type=FeatureType.ACTION, shape=(2,)),
+            "state": PolicyFeature(type=FeatureType.STATE, shape=(7,)),
+        }
+    )
+    features_map: dict[str, str] = field(
+        default_factory=lambda: {
+            ACTION: ACTION,
+            "agent_pos": OBS_STATE,
+            "environment_state": OBS_ENV_STATE,
+            "pixels": OBS_IMAGE,
+        }
+    )
 
+    def __post_init__(self):
+        if self.obs_type == "pixels_agent_pos":
+            self.features["pixels"] = PolicyFeature(
+                type=FeatureType.VISUAL, shape=(self.observation_height, self.observation_width, 3)
+            )
+        elif self.obs_type == "environment_state_agent_pos":
+            self.features["environment_state"] = PolicyFeature(type=FeatureType.ENV, shape=(16,))
+
+    @property
+    def gym_kwargs(self) -> dict:
+        return {
+            "obs_type": self.obs_type,
+            "render_mode": self.render_mode,
+            "visualization_width": self.visualization_width,
+            "visualization_height": self.visualization_height,
+            "max_episode_steps": self.episode_length,
+        }
+
+    @property
+    def package_name(self) -> str:
+        """Package name to import if environment not found in gym registry"""
+        return "gym_pusht"
+    
+    @property
+    def gym_id(self) -> str:
+        """ID string used in gym.make() to instantiate the environment"""
+        return f"gym_pusht/{self.task}"
+    
 @dataclass
 class ImagePreprocessingConfig:
     crop_params_dict: dict[str, tuple[int, int, int, int]] | None = None

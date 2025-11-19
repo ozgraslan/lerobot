@@ -21,6 +21,7 @@ from .smolvla.configuration_smolvla import SmolVLAConfig as SmolVLAConfig
 from .smolvla.processor_smolvla import SmolVLANewLineProcessor
 from .tdmpc.configuration_tdmpc import TDMPCConfig as TDMPCConfig
 from .vqbet.configuration_vqbet import VQBeTConfig as VQBeTConfig
+from .diffusion_dino.configuration_diffusion_dino import DiffusionDinoConfig as DiffusionDinoConfig
 
 __all__ = [
     "ACTConfig",
@@ -31,4 +32,5 @@ __all__ = [
     "TDMPCConfig",
     "VQBeTConfig",
     "GrootConfig",
+    "DiffusionDinoConfig",
 ]

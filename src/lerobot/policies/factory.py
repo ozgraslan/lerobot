@@ -38,6 +38,7 @@ from lerobot.policies.sac.configuration_sac import SACConfig
 from lerobot.policies.sac.reward_model.configuration_classifier import RewardClassifierConfig
 from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig
 from lerobot.policies.tdmpc.configuration_tdmpc import TDMPCConfig
+from lerobot.policies.diffusion_dino.configuration_diffusion_dino import DiffusionDinoConfig
 from lerobot.policies.utils import validate_visual_features_consistency
 from lerobot.policies.vqbet.configuration_vqbet import VQBeTConfig
 from lerobot.processor import PolicyAction, PolicyProcessorPipeline
@@ -107,6 +108,9 @@ def get_policy_class(name: str) -> type[PreTrainedPolicy]:
         from lerobot.policies.groot.modeling_groot import GrootPolicy
 
         return GrootPolicy
+    elif name == "diffusion_dino":
+        from lerobot.policies.diffusion_dino.modeling_diffusion_dino import DiffusionDinoPolicy
+        return DiffusionDinoPolicy
     else:
         raise NotImplementedError(f"Policy with name {name} is not implemented.")
 
@@ -134,6 +138,8 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return TDMPCConfig(**kwargs)
     elif policy_type == "diffusion":
         return DiffusionConfig(**kwargs)
+    elif policy_type == "diffusion_dino":
+        return DiffusionDinoConfig(**kwargs)
     elif policy_type == "act":
         return ACTConfig(**kwargs)
     elif policy_type == "vqbet":
@@ -260,6 +266,14 @@ def make_pre_post_processors(
 
     elif isinstance(policy_cfg, DiffusionConfig):
         from lerobot.policies.diffusion.processor_diffusion import make_diffusion_pre_post_processors
+
+        processors = make_diffusion_pre_post_processors(
+            config=policy_cfg,
+            dataset_stats=kwargs.get("dataset_stats"),
+        )
+
+    elif isinstance(policy_cfg, DiffusionDinoConfig):
+        from lerobot.policies.diffusion_dino.processor_diffusion_dino import make_diffusion_pre_post_processors
 
         processors = make_diffusion_pre_post_processors(
             config=policy_cfg,

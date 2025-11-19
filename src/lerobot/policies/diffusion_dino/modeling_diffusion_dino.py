@@ -33,29 +33,47 @@ from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from torch import Tensor, nn
 
-from lerobot.policies.diffusion.configuration_diffusion import DiffusionConfig
+from lerobot.policies.diffusion_dino.configuration_diffusion_dino import DiffusionDinoConfig
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.utils import (
     get_device_from_parameters,
     get_dtype_from_parameters,
-    get_output_shape,
     populate_queues,
 )
 from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_IMAGES, OBS_STATE
 
 
-class DiffusionPolicy(PreTrainedPolicy):
+def get_output_shape_dino(backbone: nn.Module, input_shape: tuple, output_key: str) -> tuple:
+    """
+    Calculates the output shape of a PyTorch module given an input shape.
+
+    Args:
+        module (nn.Module): a PyTorch module
+        input_shape (tuple): A tuple representing the input shape, e.g., (batch_size, channels, height, width)
+
+    Returns:
+        tuple: The output shape of the module.
+    """
+    dummy_input = torch.zeros(size=input_shape)
+    image_h, image_w = dummy_input.shape[2:]
+    kernel_h, kernel_w = backbone.patch_embed.proj.kernel_size
+    with torch.inference_mode():
+        patch_tokens = backbone.forward_features(dummy_input)[output_key]
+    reshaped_pt = einops.rearrange(patch_tokens, "b (h w) c -> b c h w", h=image_h//kernel_h, w=image_w//kernel_w)
+    return tuple(reshaped_pt.shape)
+
+class DiffusionDinoPolicy(PreTrainedPolicy):
     """
     Diffusion Policy as per "Diffusion Policy: Visuomotor Policy Learning via Action Diffusion"
     (paper: https://huggingface.co/papers/2303.04137, code: https://github.com/real-stanford/diffusion_policy).
     """
 
-    config_class = DiffusionConfig
-    name = "diffusion"
+    config_class = DiffusionDinoConfig
+    name = "diffusion_dino"
 
     def __init__(
         self,
-        config: DiffusionConfig,
+        config: DiffusionDinoConfig,
     ):
         """
         Args:
@@ -161,7 +179,7 @@ def _make_noise_scheduler(name: str, **kwargs: dict) -> DDPMScheduler | DDIMSche
 
 
 class DiffusionModel(nn.Module):
-    def __init__(self, config: DiffusionConfig):
+    def __init__(self, config: DiffusionDinoConfig):
         super().__init__()
         self.config = config
 
@@ -170,11 +188,11 @@ class DiffusionModel(nn.Module):
         if self.config.image_features:
             num_images = len(self.config.image_features)
             if self.config.use_separate_rgb_encoder_per_camera:
-                encoders = [DiffusionRgbEncoder(config) for _ in range(num_images)]
+                encoders = [DiffusionDinoEncoder(config) for _ in range(num_images)]
                 self.rgb_encoder = nn.ModuleList(encoders)
                 global_cond_dim += encoders[0].feature_dim * num_images
             else:
-                self.rgb_encoder = DiffusionRgbEncoder(config)
+                self.rgb_encoder = DiffusionDinoEncoder(config)
                 global_cond_dim += self.rgb_encoder.feature_dim * num_images
         if self.config.env_state_feature:
             global_cond_dim += self.config.env_state_feature.shape[0]
@@ -435,14 +453,13 @@ class SpatialSoftmax(nn.Module):
 
         return feature_keypoints
 
-
-class DiffusionRgbEncoder(nn.Module):
+class DiffusionDinoEncoder(nn.Module):
     """Encodes an RGB image into a 1D feature vector.
 
     Includes the ability to normalize and crop the image first.
     """
 
-    def __init__(self, config: DiffusionConfig):
+    def __init__(self, config: DiffusionDinoConfig):
         super().__init__()
         # Set up optional preprocessing.
         if config.crop_shape is not None:
@@ -457,22 +474,11 @@ class DiffusionRgbEncoder(nn.Module):
             self.do_crop = False
 
         # Set up backbone.
-        backbone_model = getattr(torchvision.models, config.vision_backbone)(
-            weights=config.pretrained_backbone_weights
-        )
-        # Note: This assumes that the layer4 feature map is children()[-3]
-        # TODO(alexander-soare): Use a safer alternative.
-        self.backbone = nn.Sequential(*(list(backbone_model.children())[:-2]))
-        if config.use_group_norm:
-            if config.pretrained_backbone_weights:
-                raise ValueError(
-                    "You can't replace BatchNorm in a pretrained model without ruining the weights!"
-                )
-            self.backbone = _replace_submodules(
-                root_module=self.backbone,
-                predicate=lambda x: isinstance(x, nn.BatchNorm2d),
-                func=lambda x: nn.GroupNorm(num_groups=x.num_features // 16, num_channels=x.num_features),
-            )
+        self.backbone = torch.hub.load(config.vision_backbone, config.pretrained_backbone_weights)
+        self.backbone.requires_grad_(False)
+        self.backbone.eval()
+
+        self.kernel_h, self.kernel_w = self.backbone.patch_embed.proj.kernel_size
 
         # Set up pooling and final layers.
         # Use a dry run to get the feature map shape.
@@ -484,9 +490,8 @@ class DiffusionRgbEncoder(nn.Module):
         images_shape = next(iter(config.image_features.values())).shape
         dummy_shape_h_w = config.crop_shape if config.crop_shape is not None else images_shape[1:]
         dummy_shape = (1, images_shape[0], *dummy_shape_h_w)
-        print("Dummy Shape:", dummy_shape)
-        feature_map_shape = get_output_shape(self.backbone, dummy_shape)[1:]
-        print("Feature Map Shape:", feature_map_shape)
+        feature_map_shape = get_output_shape_dino(self.backbone, dummy_shape, config.output_key)[1:]
+        self.output_key = config.output_key
 
         self.pool = SpatialSoftmax(feature_map_shape, num_kp=config.spatial_softmax_num_keypoints)
         self.feature_dim = config.spatial_softmax_num_keypoints * 2
@@ -500,6 +505,7 @@ class DiffusionRgbEncoder(nn.Module):
         Returns:
             (B, D) image feature.
         """
+        image_h, image_w = x.shape[2:]
         # Preprocess: maybe crop (if it was set up in the __init__).
         if self.do_crop:
             if self.training:  # noqa: SIM108
@@ -507,45 +513,26 @@ class DiffusionRgbEncoder(nn.Module):
             else:
                 # Always use center crop for eval.
                 x = self.center_crop(x)
+        
         # Extract backbone feature.
-        x = torch.flatten(self.pool(self.backbone(x)), start_dim=1)
+        patch_tokens = self.backbone.forward_features(x)[self.output_key]
+                
+        patch_tokens = einops.rearrange(
+            patch_tokens, 
+            "b (h w) c -> b c h w", 
+            h=image_h//self.kernel_h, w=image_w//self.kernel_w
+        )
+
+        x = torch.flatten(self.pool(patch_tokens), start_dim=1)
         # Final linear layer with non-linearity.
         x = self.relu(self.out(x))
         return x
 
-
-def _replace_submodules(
-    root_module: nn.Module, predicate: Callable[[nn.Module], bool], func: Callable[[nn.Module], nn.Module]
-) -> nn.Module:
-    """
-    Args:
-        root_module: The module for which the submodules need to be replaced
-        predicate: Takes a module as an argument and must return True if the that module is to be replaced.
-        func: Takes a module as an argument and returns a new module to replace it with.
-    Returns:
-        The root module with its submodules replaced.
-    """
-    if predicate(root_module):
-        return func(root_module)
-
-    replace_list = [k.split(".") for k, m in root_module.named_modules(remove_duplicate=True) if predicate(m)]
-    for *parents, k in replace_list:
-        parent_module = root_module
-        if len(parents) > 0:
-            parent_module = root_module.get_submodule(".".join(parents))
-        if isinstance(parent_module, nn.Sequential):
-            src_module = parent_module[int(k)]
-        else:
-            src_module = getattr(parent_module, k)
-        tgt_module = func(src_module)
-        if isinstance(parent_module, nn.Sequential):
-            parent_module[int(k)] = tgt_module
-        else:
-            setattr(parent_module, k, tgt_module)
-    # verify that all BN are replaced
-    assert not any(predicate(m) for _, m in root_module.named_modules(remove_duplicate=True))
-    return root_module
-
+    def train(self, mode: bool = True):
+        super().train(mode)
+        self.backbone.eval()
+        self.pool.train(mode)
+        self.out.train(mode)
 
 class DiffusionSinusoidalPosEmb(nn.Module):
     """1D sinusoidal positional embeddings as in Attention is All You Need."""
@@ -586,7 +573,7 @@ class DiffusionConditionalUnet1d(nn.Module):
     Note: this removes local conditioning as compared to the original diffusion policy code.
     """
 
-    def __init__(self, config: DiffusionConfig, global_cond_dim: int):
+    def __init__(self, config: DiffusionDinoConfig, global_cond_dim: int):
         super().__init__()
 
         self.config = config
