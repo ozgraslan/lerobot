@@ -17,7 +17,7 @@ export WANDB_DIR=$SCRATCH
 export WANDB_MODE=online
 
 lerobot-train \
-    --output_dir=outputs/train/diffusion_dino_pusht_1 \
+    --output_dir=/network/scratch/o/ozgur.aslan/outputs/train/diffusion_dino_pusht_1 \
     --policy.repo_id=ozgraslan/diffusion_dino_pusht \
     --policy.type=diffusion_dino \
     --dataset.repo_id=ozgraslan/pusht_224 \

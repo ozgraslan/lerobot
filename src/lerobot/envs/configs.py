@@ -178,14 +178,17 @@ class PushtEnv224(EnvConfig):
     features_map: dict[str, str] = field(
         default_factory=lambda: {
             ACTION: ACTION,
-            "agent_pos": OBS_STATE,
-            "environment_state": OBS_ENV_STATE,
+            "state_full": OBS_STATE,
             "pixels": OBS_IMAGE,
         }
     )
 
     def __post_init__(self):
         if self.obs_type == "pixels_agent_pos":
+            self.features["pixels"] = PolicyFeature(
+                type=FeatureType.VISUAL, shape=(self.observation_height, self.observation_width, 3)
+            )
+        elif self.obs_type == "pixels_state":
             self.features["pixels"] = PolicyFeature(
                 type=FeatureType.VISUAL, shape=(self.observation_height, self.observation_width, 3)
             )
@@ -197,6 +200,8 @@ class PushtEnv224(EnvConfig):
         return {
             "obs_type": self.obs_type,
             "render_mode": self.render_mode,
+            "observation_width": self.observation_width,
+            "observation_height": self.observation_height,
             "visualization_width": self.visualization_width,
             "visualization_height": self.visualization_height,
             "max_episode_steps": self.episode_length,

@@ -95,6 +95,11 @@ def preprocess_observation(observations: dict[str, np.ndarray]) -> dict[str, Ten
         if agent_pos.dim() == 1:
             agent_pos = agent_pos.unsqueeze(0)
         return_observations[OBS_STATE] = agent_pos
+    elif "state_full" in observations:
+        state = torch.from_numpy(observations["state_full"]).float()
+        if state.dim() == 1:
+            state = state.unsqueeze(0)
+        return_observations[OBS_STATE] = state
 
     if "robot_state" in observations:
         return_observations[f"{OBS_STR}.robot_state"] = _convert_nested_dict(observations["robot_state"])
